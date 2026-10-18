@@ -128,6 +128,14 @@
   .btn.danger { color: var(--warn-ink); }
   .actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
   .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .diag {
+    margin: 8px 0 0; padding: 10px 12px;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+    font: 12px/1.55 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  }
+  .error details summary { cursor: pointer; margin-top: 8px; font-weight: 600; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .song { transition: none; } }
 </style>
@@ -146,7 +154,10 @@
       </div>
       <div class="meta"><span id="metaCount"></span><span id="metaTime"></span></div>
     </div>
-    <div id="error" class="error" hidden></div>
+    <div id="error" class="error" hidden>
+      <div id="errorMsg"></div>
+      <details id="errorDetail" hidden><summary>詳細(原因の手がかり)</summary><pre id="errorPre" class="diag"></pre></details>
+    </div>
     <div id="results"></div>
   </section>
 
@@ -165,6 +176,7 @@
         <button id="btnAutoUid" class="btn" type="button">自動取得</button>
       </div>
       <div id="uidMsg" class="hint"></div>
+      <pre id="uidDiag" class="diag" hidden></pre>
 
       <div class="actions">
         <button id="btnSave" class="btn primary" type="button">保存して取得</button>
@@ -184,7 +196,7 @@
   // ===== 設定値(必要ならここだけ変更) =====
   const API_BASE = 'https://bpi2.poyashi.me/api/v1';
   // ユーザー情報取得APIのパス候補(ドキュメントで確認したものに合わせて先頭を直してください)
-  const ME_PATH_CANDIDATES = ['/auth/me', '/auth/user', '/users/me', '/me'];
+  const ME_PATH_CANDIDATES = ['/auth/me', '/auth/user', '/auth/whoami', '/auth/profile', '/users/me', '/me'];
   // 表示する難易度(APIのdifficulty文字列を正規化して前方一致)
   const SHOW_DIFFICULTIES = [
     { key: 'A', match: ['ANOTHER'], label: 'ANOTHER' },
@@ -201,7 +213,8 @@
     viewSearch: $('viewSearch'), viewSettings: $('viewSettings'),
     q: $('q'), results: $('results'), error: $('error'),
     metaCount: $('metaCount'), metaTime: $('metaTime'),
-    token: $('token'), uid: $('uid'), uidMsg: $('uidMsg'), settingsMsg: $('settingsMsg'),
+    token: $('token'), uid: $('uid'), uidMsg: $('uidMsg'), uidDiag: $('uidDiag'), settingsMsg: $('settingsMsg'),
+    errorMsg: $('errorMsg'), errorDetail: $('errorDetail'), errorPre: $('errorPre'),
     btnRefresh: $('btnRefresh'), btnSettings: $('btnSettings'),
     btnSave: $('btnSave'), btnBack: $('btnBack'), btnClear: $('btnClear'), btnAutoUid: $('btnAutoUid'),
   };
@@ -276,39 +289,126 @@
     } catch { return false; }
   }
 
+  class AppError extends Error {
+    constructor(kind, msg, detail) { super(msg); this.kind = kind; this.detail = detail || ''; }
+  }
+
+  function clip(v, n = 160) {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  }
+
+  // 1回のGET。例外は投げず、結果を常に同じ形で返す(トークンは記録しない)
+  async function probe(url, token) {
+    const r = { url, path: '', ok: false, status: 0, ct: '', text: '', json: undefined, jsonError: '', netError: '' };
+    try { const u = new URL(url); r.path = u.pathname + u.search; } catch { r.path = url; }
+    let res;
+    try {
+      res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+    } catch (e) {
+      r.netError = (e && e.message) || String(e);
+      return r;
+    }
+    r.status = res.status;
+    r.ok = res.ok;
+    r.ct = res.headers.get('content-type') || '';
+    try { r.text = await res.text(); } catch (e) { r.jsonError = '本文を読めません: ' + e.message; return r; }
+    try { r.json = JSON.parse(r.text); } catch (e) { r.jsonError = e.message; }
+    return r;
+  }
+
+  function describe(r) {
+    if (r.netError) return `通信失敗 (${r.netError})`;
+    const kind = r.jsonError ? `JSONではない: ${clip(r.text, 80)}` : 'JSON';
+    return `HTTP ${r.status} / ${r.ct || 'content-typeなし'} / ${kind}`;
+  }
+
   async function fetchBestEver() {
     const token = store.get(LS_TOKEN);
     const uid = store.get(LS_UID);
-    if (!token || !uid) throw new AppError('setup', 'トークンとユーザーIDを設定してください。');
-
-    let res;
-    try {
-      res = await fetch(`${API_BASE}/users/${encodeURIComponent(uid)}/scores/best-ever`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    } catch (e) {
-      throw new AppError('network', '通信に失敗しました。電波状況を確認してください。改善しない場合、ブラウザからのアクセスがAPI側で許可されていない(CORS)可能性があります。');
+    if (!token || !uid) {
+      throw new AppError('setup', 'トークンとユーザーIDが未設定です。', '設定画面で両方を入力して「保存して取得」を押してください。');
     }
-    if (res.status === 401) throw new AppError('auth', 'トークンが無効か期限切れです。設定で入れ直してください。');
-    if (res.status === 403) throw new AppError('auth', 'このトークンではアクセスできません(403)。');
-    if (res.status === 404) throw new AppError('setup', 'ユーザーが見つかりません。ユーザーIDを確認してください。');
-    if (!res.ok) throw new AppError('http', `APIエラー(${res.status})`);
 
-    const raw = await res.json();
-    if (!Array.isArray(raw)) throw new AppError('http', '想定外のレスポンス形式です。');
+    const url = `${API_BASE}/users/${encodeURIComponent(uid)}/scores/best-ever`;
+    const r = await probe(url, token);
+    const head = `GET ${r.path}`;
+
+    // 通信そのものが失敗
+    if (r.netError) {
+      throw new AppError('network', '通信できませんでした(オフライン / CORS / URL誤りのいずれか)。',
+        `${head}\nfetch失敗: ${r.netError}\n※ブラウザはこの3つを区別できません。機内モードやWi-Fi不調でなければ、API側がブラウザからのアクセスを許可していない(CORS)可能性が高いです。`);
+    }
+
+    // HTTPエラー
+    if (!r.ok) {
+      const why = {
+        400: 'リクエストが不正です(400)。ユーザーIDの形式を確認してください。',
+        401: 'トークンが無効か期限切れです(401)。',
+        403: 'このトークンでは権限がありません(403)。',
+        404: 'URLまたはユーザーIDが違います(404)。',
+        405: 'メソッドが許可されていません(405)。URLが違う可能性があります。',
+        429: 'リクエストが多すぎます(429)。少し待ってください。',
+      }[r.status] || (r.status >= 500 ? `APIサーバー側のエラーです(${r.status})。` : `APIエラーです(${r.status})。`);
+      throw new AppError(r.status === 401 || r.status === 403 ? 'auth' : 'http', why,
+        `${head}\n${describe(r)}\n応答の先頭: ${clip(r.text) || '(空)'}`);
+    }
+
+    // 形式チェック1: JSONか
+    if (r.jsonError) {
+      throw new AppError('format', '応答がJSONではありません。',
+        `${head}\n${describe(r)}\nJSON解析エラー: ${r.jsonError}\n※URL(/api/v1 の付け忘れなど)が違い、HTMLページが返っている可能性があります。`);
+    }
+
+    // 形式チェック2: 配列か(オブジェクトの中に配列があれば救済)
+    let raw = r.json;
+    let note = '';
+    if (!Array.isArray(raw)) {
+      const keys = raw && typeof raw === 'object' ? Object.keys(raw) : [];
+      const arrKey = keys.find((k) => Array.isArray(raw[k]));
+      if (!arrKey) {
+        throw new AppError('format', '応答の形式が想定と違います(配列ではありません)。',
+          `${head}\n${describe(r)}\n型: ${raw === null ? 'null' : typeof raw}\nキー: ${keys.join(', ') || '(なし)'}\n応答の先頭: ${clip(r.text)}`);
+      }
+      raw = raw[arrKey];
+      note = `※応答は配列ではなく、キー「${arrKey}」の中の配列を使用しました。`;
+    }
+
+    // 形式チェック3: 0件
+    if (raw.length === 0) {
+      throw new AppError('empty', '取得できましたが、スコアが0件でした。',
+        `${head}\n${describe(r)}\nまだスコアを取り込んでいないか、ユーザーIDが別のアカウントのものかもしれません。${note}`);
+    }
+
+    // 形式チェック4: 必要な項目があるか
+    const sample = raw[0] && typeof raw[0] === 'object' ? raw[0] : {};
+    const missing = ['title', 'difficulty', 'bestExScore'].filter((k) => !(k in sample));
+    if (missing.length) {
+      throw new AppError('format', `想定した項目がありません: ${missing.join(', ')}`,
+        `${head}\n${describe(r)}\n件数: ${raw.length}\n1件目のキー: ${Object.keys(sample).join(', ') || '(なし)'}\n1件目: ${clip(JSON.stringify(raw[0]), 240)}`);
+    }
+
+    // 形式チェック5: 表示対象の難易度があるか
+    const list = buildSongs(raw);
+    if (!list.length) {
+      const vals = [...new Set(raw.map((x) => String(x.difficulty)))].slice(0, 12);
+      throw new AppError('filter', `${raw.length}件取得しましたが、ANOTHER / LEGGENDARIA の譜面が見つかりません。`,
+        `${head}\ndifficultyの値の例: ${vals.join(', ')}\n※この表記に合わせて SHOW_DIFFICULTIES(ソース上部)を直す必要があります。${note}`);
+    }
+
     saveCache(raw);
-    songs = buildSongs(raw);
+    songs = list;
     fetchedAt = Date.now();
   }
 
-  class AppError extends Error {
-    constructor(kind, msg) { super(msg); this.kind = kind; }
-  }
-
   // ===== 表示 =====
-  function showError(msg) {
-    el.error.textContent = msg;
+  function showError(msg, detail) {
+    el.errorMsg.textContent = msg || '';
     el.error.hidden = !msg;
+    const has = !!(msg && detail);
+    el.errorDetail.hidden = !has;
+    el.errorPre.textContent = has ? detail : '';
+    if (has) el.errorDetail.open = true;
   }
 
   function fmtTime(ts) {
@@ -447,11 +547,7 @@
       renderMeta();
       renderResults();
     } catch (e) {
-      showError(e.message || '取得に失敗しました。');
-      if (e.kind === 'auth' || e.kind === 'setup') {
-        // 設定の見直しが必要
-        if (!songs.length) show('settings');
-      }
+      showError(e.message || '取得に失敗しました。', e.detail || (e.stack ? String(e.stack).split('\n')[0] : ''));
     } finally {
       el.btnRefresh.disabled = false;
       el.btnRefresh.textContent = '↻';
@@ -466,20 +562,88 @@
     return v === undefined ? null : String(v);
   }
 
+  // JWTなら中身(payload)を読む。ネットワーク通信はしない
+  function decodeJwt(t) {
+    const parts = t.split('.');
+    if (parts.length !== 3) return null;
+    try {
+      let b = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      b = b.padEnd(Math.ceil(b.length / 4) * 4, '=');
+      const bin = atob(b);
+      const json = decodeURIComponent(Array.from(bin, (c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''));
+      const o = JSON.parse(json);
+      return o && typeof o === 'object' ? o : null;
+    } catch { return null; }
+  }
+
   async function autoUid() {
     const token = el.token.value.trim();
-    if (!token) { el.uidMsg.textContent = '先にトークンを入力してください。'; return; }
+    const log = [];
+    const done = (msg) => {
+      el.uidMsg.textContent = msg;
+      el.uidDiag.textContent = log.join('\n');
+      el.uidDiag.hidden = !log.length;
+    };
+    if (!token) { done('先にトークンを入力してください。'); return; }
     el.uidMsg.textContent = '取得中…';
-    for (const p of ME_PATH_CANDIDATES) {
-      try {
-        const res = await fetch(`${API_BASE}${p}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.status === 401) { el.uidMsg.textContent = 'トークンが無効です。'; return; }
-        if (!res.ok) continue;
-        const id = pickId(await res.json());
-        if (id) { el.uid.value = id; el.uidMsg.textContent = 'ユーザーIDを取得しました。'; return; }
-      } catch { /* 次の候補へ */ }
+    el.uidDiag.hidden = true;
+
+    // 1) トークンがJWTなら、中にuidが入っていることがある
+    const claims = decodeJwt(token);
+    if (claims) {
+      log.push(`[1] トークンはJWT形式。含まれる項目: ${Object.keys(claims).join(', ') || '(なし)'}`);
+      const id = claims.uid || claims.user_id || claims.userId || claims.sub;
+      if (id) {
+        el.uid.value = String(id);
+        log.push(`    → ID候補「${id}」を採用`);
+        done('トークンからユーザーID候補を取り出しました。「保存して取得」で確認してください(404なら別のIDです)。');
+        return;
+      }
+      log.push('    → uid / user_id / sub が見当たりません');
+    } else {
+      log.push('[1] トークンはJWT形式ではないため、中身からは読み取れません');
     }
-    el.uidMsg.textContent = '自動取得できませんでした。BPIM2にログインして自分のページを開き、URLの /users/ の次の部分をコピーして貼り付けてください。';
+
+    // 2) ユーザー情報APIを候補パスで順に試す
+    log.push('[2] ユーザー情報APIを試行');
+    const bases = [API_BASE];
+    try { const o = new URL(API_BASE).origin; if (o !== API_BASE) bases.push(o); } catch {}
+    const results = [];
+    for (const base of bases) {
+      for (const p of ME_PATH_CANDIDATES) {
+        const r = await probe(base + p, token);
+        results.push(r);
+        let extra = '';
+        if (r.ok && r.json !== undefined) {
+          const id = pickId(r.json);
+          if (id) {
+            el.uid.value = id;
+            log.push(`  GET ${r.path} → ${describe(r)}`);
+            log.push(`    → ユーザーID「${id}」を取得`);
+            done('ユーザーIDを取得しました。');
+            return;
+          }
+          const keys = r.json && typeof r.json === 'object' ? Object.keys(r.json).join(', ') : typeof r.json;
+          extra = ` / IDらしい項目なし。キー: ${keys}`;
+        }
+        log.push(`  GET ${r.path} → ${describe(r)}${extra}`);
+        if (r.status === 401) {
+          done('トークンが無効か期限切れです(401)。トークンを確認してください。');
+          return;
+        }
+      }
+    }
+
+    // 失敗の要約
+    const allNet = results.every((r) => r.netError);
+    const all404 = results.every((r) => r.status === 404);
+    const anyOkNoId = results.some((r) => r.ok && r.json !== undefined);
+    let why;
+    if (allNet) why = 'どの候補にも通信できませんでした(オフラインまたはCORSの可能性)。';
+    else if (all404) why = '候補のパスがすべて404でした。ユーザー情報APIのパスが候補と違います。';
+    else if (anyOkNoId) why = '応答は返りましたが、ユーザーIDの項目が見つかりません(下のキー一覧を確認)。';
+    else why = '候補のパスでは取得できませんでした(下の診断を確認)。';
+    done(`自動取得できませんでした: ${why} BPIM2にログインして自分のページを開き、URLの /users/ の次の部分を貼り付けても入力できます。`);
   }
 
   // ===== イベント =====
