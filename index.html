@@ -583,6 +583,64 @@
     return engPromise;
   }
 
+  // 漢字を含む部分の一覧(形態素解析にかける文字列)
+  function kanjiSegments(titles) {
+    const set = new Set();
+    for (const t of titles) {
+      for (const part of String(t).normalize('NFKC').split(/([A-Za-z]+)/)) {
+        if (part && !/^[A-Za-z]+$/.test(part) && KANJI.test(part)) set.add(part);
+      }
+    }
+    return [...set];
+  }
+
+  // 辞書の読み込みと解析を Web Worker で行い、画面操作を止めない
+  function tokenizeInWorker(segs) {
+    return new Promise((resolve, reject) => {
+      const code = `importScripts(${JSON.stringify(KUROMOJI_JS)});
+var tk = null;
+kuromoji.builder({ dicPath: ${JSON.stringify(KUROMOJI_DICT)} }).build(function (err, t) {
+  if (err) { postMessage({ type: 'error', message: String((err && err.message) || err) }); return; }
+  tk = t;
+  postMessage({ type: 'ready' });
+});
+onmessage = function (e) {
+  if (!tk) return;
+  var out = {};
+  e.data.segs.forEach(function (s) {
+    out[s] = tk.tokenize(s).map(function (t) {
+      return [t.reading && t.reading !== '*' ? t.reading : '', t.surface_form];
+    });
+  });
+  postMessage({ type: 'result', out: out });
+};`;
+      let url = '';
+      let worker = null;
+      const finish = (fn, v) => {
+        try { if (worker) worker.terminate(); } catch {}
+        try { if (url) URL.revokeObjectURL(url); } catch {}
+        fn(v);
+      };
+      try {
+        url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+        worker = new Worker(url);
+      } catch (e) { reject(e); return; }
+      worker.onmessage = (ev) => {
+        const m = ev.data || {};
+        if (m.type === 'ready') {
+          readState = '読みを作成中…';
+          renderMeta();
+          worker.postMessage({ segs });
+        } else if (m.type === 'result') {
+          finish(resolve, m.out);
+        } else if (m.type === 'error') {
+          finish(reject, new Error(m.message));
+        }
+      };
+      worker.onerror = (ev) => finish(reject, new Error((ev && ev.message) || 'worker error'));
+    });
+  }
+
   // 保存済みの読みと、補正(別名)を曲に結び付ける
   function attachReadings() {
     const rm = loadJson(LS_READ);
@@ -608,7 +666,18 @@
       let eng = null;
       const notes = [];
       if (needEn) { try { eng = await getEngDict(); } catch { notes.push('英単語辞書'); } }
-      if (needJa) { try { tk = await getTokenizer(); } catch { notes.push('漢字の読み'); } }
+      if (needJa) {
+        const segs = kanjiSegments(missing.map((sg) => sg.title).filter((t) => KANJI.test(t)));
+        readState = '漢字の辞書を読み込み中…(初回のみ。この間も検索できます)';
+        renderMeta();
+        try {
+          const map = await tokenizeInWorker(segs);
+          tk = { tokenize: (seg) => (map[seg] || [['', seg]]).map(([r, sf]) => ({ reading: r, surface_form: sf })) };
+        } catch {
+          // 最後の手段: 画面を止めて直接読み込む(Worker が使えない環境向け)
+          try { tk = await getTokenizer(); } catch { notes.push('漢字の読み'); }
+        }
+      }
       const out = { ...rm };
       for (const sg of missing) {
         const hasJa = KANJI.test(sg.title);
