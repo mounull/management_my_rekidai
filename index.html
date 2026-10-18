@@ -138,6 +138,8 @@
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
   }
   .error details summary { cursor: pointer; margin-top: 8px; font-weight: 600; }
+  .prog { height: 4px; border-radius: 2px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .prog > div { height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
   .tag { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-left: 8px; vertical-align: middle; white-space: nowrap; }
   .tools { padding: 2px 0 6px; border-top: 1px solid var(--line); }
   .alias-btn { background: none; border: 0; color: var(--accent); font-size: 13px; padding: 8px 0 4px; cursor: pointer; }
@@ -158,6 +160,7 @@
         <button id="btnSettings" class="icon-btn" type="button" aria-label="設定" title="設定">⚙</button>
       </div>
       <div class="meta"><span id="metaCount"></span><span id="metaTime"></span></div>
+      <div id="prog" class="prog" hidden role="progressbar" aria-label="読みの準備"><div id="progBar"></div></div>
     </div>
     <div id="error" class="error" hidden>
       <div id="errorMsg"></div>
@@ -226,7 +229,7 @@
     q: $('q'), results: $('results'), error: $('error'),
     metaCount: $('metaCount'), metaTime: $('metaTime'),
     token: $('token'), uid: $('uid'), uidMsg: $('uidMsg'), uidDiag: $('uidDiag'), settingsMsg: $('settingsMsg'),
-    apiBase: $('apiBase'), errorMsg: $('errorMsg'), errorDetail: $('errorDetail'), errorPre: $('errorPre'),
+    prog: $('prog'), progBar: $('progBar'), apiBase: $('apiBase'), errorMsg: $('errorMsg'), errorDetail: $('errorDetail'), errorPre: $('errorPre'),
     btnRefresh: $('btnRefresh'), btnSettings: $('btnSettings'),
     btnSave: $('btnSave'), btnBack: $('btnBack'), btnClear: $('btnClear'), btnAutoUid: $('btnAutoUid'),
   };
@@ -550,29 +553,9 @@
   let aliasMap = loadJson(LS_ALIAS);
   let readState = '';
   let readingBusy = false;
-  let tokenizerPromise = null;
+  let readFrac = null; // 0〜1 のとき進捗バーを表示
   let engPromise = null;
 
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const el2 = document.createElement('script');
-      el2.src = src;
-      el2.onload = resolve;
-      el2.onerror = () => reject(new Error('スクリプトを読み込めません: ' + src));
-      document.head.append(el2);
-    });
-  }
-  function getTokenizer() {
-    if (!tokenizerPromise) {
-      tokenizerPromise = (async () => {
-        await loadScript(KUROMOJI_JS);
-        return await new Promise((resolve, reject) => {
-          kuromoji.builder({ dicPath: KUROMOJI_DICT }).build((e, t) => (e ? reject(e) : resolve(t)));
-        });
-      })().catch((e) => { tokenizerPromise = null; throw e; });
-    }
-    return tokenizerPromise;
-  }
   function getEngDict() {
     if (!engPromise) {
       engPromise = fetch(ENG_DICT_URL).then((r) => {
@@ -594,26 +577,106 @@
     return [...set];
   }
 
-  // 辞書の読み込みと解析を Web Worker で行い、画面操作を止めない
-  function tokenizeInWorker(segs) {
-    return new Promise((resolve, reject) => {
-      const code = `importScripts(${JSON.stringify(KUROMOJI_JS)});
-var tk = null;
-kuromoji.builder({ dicPath: ${JSON.stringify(KUROMOJI_DICT)} }).build(function (err, t) {
-  if (err) { postMessage({ type: 'error', message: String((err && err.message) || err) }); return; }
-  tk = t;
-  postMessage({ type: 'ready' });
-});
+  // ===== 漢字辞書(kuromoji)の取得: 進捗表示つき =====
+  // ファイル名とバイト数(進捗の分母)。バージョン固定なので変わりません
+  const DICT_FILES = {
+    'base.dat.gz': 3956825, 'cc.dat.gz': 1692067, 'check.dat.gz': 3111633, 'tid.dat.gz': 1605820,
+    'tid_map.dat.gz': 1485576, 'tid_pos.dat.gz': 5916009, 'unk.dat.gz': 10512, 'unk_char.dat.gz': 306,
+    'unk_compat.dat.gz': 338, 'unk_invoke.dat.gz': 1140, 'unk_map.dat.gz': 1190, 'unk_pos.dat.gz': 10540,
+  };
+  const DICT_TOTAL = Object.values(DICT_FILES).reduce((a, b) => a + b, 0);
+
+  function setRead(label, frac) {
+    readState = label + (frac !== null && frac !== undefined ? ` ${Math.floor(frac * 100)}%` : '');
+    readFrac = frac === undefined ? null : frac;
+    renderMeta();
+  }
+
+  async function downloadFile(name, onBytes) {
+    const res = await fetch(KUROMOJI_DICT + name);
+    if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+    if (!res.body || !res.body.getReader) {
+      const b = await res.arrayBuffer();
+      onBytes(b.byteLength);
+      return b;
+    }
+    const rd = res.body.getReader();
+    const chunks = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      chunks.push(value);
+      n += value.length;
+      onBytes(value.length);
+    }
+    const out = new Uint8Array(n);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out.buffer;
+  }
+
+  async function downloadDict() {
+    let got = 0;
+    const files = {};
+    const report = (d) => { got += d; setRead('漢字の辞書をダウンロード中', Math.min(got / DICT_TOTAL, 0.99)); };
+    setRead('漢字の辞書をダウンロード中', 0);
+    await Promise.all(Object.keys(DICT_FILES).map(async (nm) => { files[nm] = await downloadFile(nm, report); }));
+    return files;
+  }
+
+  // kuromoji が XMLHttpRequest で辞書を取りに行く部分を、ダウンロード済みデータで置き換える
+  function makeFakeXhr(files) {
+    return class FakeXhr {
+      open(_m, url) { this._name = String(url).split('/').pop(); }
+      send() {
+        setTimeout(() => {
+          const buf = files[this._name];
+          if (!buf) { this.status = 404; this.statusText = '辞書ファイルがありません: ' + this._name; } else { this.status = 200; this.response = buf; }
+          this.onload();
+        }, 0);
+      }
+    };
+  }
+
+  // Worker 内で動かすコード(kuromoji 本体の後ろに連結する)
+  const WORKER_LOGIC = `
+var FILES = null, tk = null;
+function FakeXhr() {}
+FakeXhr.prototype.open = function (m, url) { this._name = String(url).split('/').pop(); };
+FakeXhr.prototype.send = function () {
+  var x = this;
+  setTimeout(function () {
+    var buf = FILES[x._name];
+    if (!buf) { x.status = 404; x.statusText = 'missing ' + x._name; } else { x.status = 200; x.response = buf; }
+    x.onload();
+  }, 0);
+};
 onmessage = function (e) {
-  if (!tk) return;
-  var out = {};
-  e.data.segs.forEach(function (s) {
-    out[s] = tk.tokenize(s).map(function (t) {
-      return [t.reading && t.reading !== '*' ? t.reading : '', t.surface_form];
+  var m = e.data;
+  if (m.type === 'init') {
+    FILES = m.files;
+    self.XMLHttpRequest = FakeXhr;
+    postMessage({ type: 'building' });
+    kuromoji.builder({ dicPath: '/dict/' }).build(function (err, t) {
+      if (err) { postMessage({ type: 'error', message: String((err && err.message) || err) }); return; }
+      tk = t;
+      postMessage({ type: 'ready' });
     });
-  });
-  postMessage({ type: 'result', out: out });
+  } else if (m.type === 'tokenize' && tk) {
+    var out = {};
+    m.segs.forEach(function (s) {
+      out[s] = tk.tokenize(s).map(function (t) {
+        return [t.reading && t.reading !== '*' ? t.reading : '', t.surface_form];
+      });
+    });
+    postMessage({ type: 'result', out: out });
+  }
 };`;
+
+  // 辞書の組み立てと解析を Web Worker で行い、画面操作を止めない
+  function tokenizeViaWorker(src, files, segs) {
+    return new Promise((resolve, reject) => {
       let url = '';
       let worker = null;
       const finish = (fn, v) => {
@@ -622,22 +685,37 @@ onmessage = function (e) {
         fn(v);
       };
       try {
-        url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+        url = URL.createObjectURL(new Blob([src, '\n;\n', WORKER_LOGIC], { type: 'text/javascript' }));
         worker = new Worker(url);
       } catch (e) { reject(e); return; }
       worker.onmessage = (ev) => {
         const m = ev.data || {};
-        if (m.type === 'ready') {
-          readState = '読みを作成中…';
-          renderMeta();
-          worker.postMessage({ segs });
-        } else if (m.type === 'result') {
-          finish(resolve, m.out);
-        } else if (m.type === 'error') {
-          finish(reject, new Error(m.message));
-        }
+        if (m.type === 'building') setRead('辞書を組み立て中…');
+        else if (m.type === 'ready') { setRead('読みを作成中…'); worker.postMessage({ type: 'tokenize', segs }); }
+        else if (m.type === 'result') finish(resolve, m.out);
+        else if (m.type === 'error') finish(reject, new Error(m.message));
       };
       worker.onerror = (ev) => finish(reject, new Error((ev && ev.message) || 'worker error'));
+      worker.postMessage({ type: 'init', files });
+    });
+  }
+
+  // Worker が使えない場合の最終手段(組み立ての数秒だけ画面が止まる)
+  function tokenizerOnMain(src, files) {
+    return new Promise((resolve, reject) => {
+      try {
+        if (!window.kuromoji) {
+          const sc = document.createElement('script');
+          sc.text = src;
+          document.head.append(sc);
+        }
+        const RealXhr = window.XMLHttpRequest;
+        window.XMLHttpRequest = makeFakeXhr(files);
+        window.kuromoji.builder({ dicPath: '/dict/' }).build((e, t) => {
+          window.XMLHttpRequest = RealXhr;
+          if (e) reject(e); else resolve(t);
+        });
+      } catch (e) { reject(e); }
     });
   }
 
@@ -657,25 +735,34 @@ onmessage = function (e) {
     const missing = songs.filter((sg) => !rm[sg.title]);
     if (!missing.length) return;
     readingBusy = true;
-    readState = '読みを準備中…';
-    renderMeta();
+    setRead('読みを準備中…');
     try {
       const needJa = missing.some((sg) => KANJI.test(sg.title));
       const needEn = missing.some((sg) => /[A-Za-z]/.test(sg.title));
       let tk = null;
       let eng = null;
       const notes = [];
-      if (needEn) { try { eng = await getEngDict(); } catch { notes.push('英単語辞書'); } }
+      let workerNote = '';
+      if (needEn) { setRead('英単語辞書を読み込み中…'); try { eng = await getEngDict(); } catch { notes.push('英単語辞書'); } }
       if (needJa) {
         const segs = kanjiSegments(missing.map((sg) => sg.title).filter((t) => KANJI.test(t)));
-        readState = '漢字の辞書を読み込み中…(初回のみ。この間も検索できます)';
-        renderMeta();
         try {
-          const map = await tokenizeInWorker(segs);
-          tk = { tokenize: (seg) => (map[seg] || [['', seg]]).map(([r, sf]) => ({ reading: r, surface_form: sf })) };
-        } catch {
-          // 最後の手段: 画面を止めて直接読み込む(Worker が使えない環境向け)
-          try { tk = await getTokenizer(); } catch { notes.push('漢字の読み'); }
+          const [src, files] = await Promise.all([
+            fetch(KUROMOJI_JS).then((r) => { if (!r.ok) throw new Error('kuromoji.js: HTTP ' + r.status); return r.text(); }),
+            downloadDict(),
+          ]);
+          let map = null;
+          try {
+            map = await tokenizeViaWorker(src, files, segs);
+            tk = { tokenize: (seg) => (map[seg] || [['', seg]]).map(([r, sf]) => ({ reading: r, surface_form: sf })) };
+          } catch (we) {
+            workerNote = '別処理を使えませんでした(' + String((we && we.message) || we).slice(0, 60) + ')';
+            setRead('辞書を組み立て中…(別処理が使えないため、数秒画面が止まります)');
+            await new Promise((r) => setTimeout(r, 50)); // 表示を更新させてから重い処理へ
+            tk = await tokenizerOnMain(src, files);
+          }
+        } catch (e) {
+          notes.push('漢字の読み(' + String((e && e.message) || e).slice(0, 60) + ')');
         }
       }
       const out = { ...rm };
@@ -686,9 +773,11 @@ onmessage = function (e) {
         out[sg.title] = readingsFor(sg.title, tk, eng);
       }
       store.set(LS_READ, JSON.stringify(out));
-      readState = notes.length ? `${notes.join('・')}を取得できず、読み検索は一部のみ` : '';
+      readState = notes.length ? `${notes.join('・')}を取得できず、読み検索は一部のみ` : workerNote;
+      readFrac = null;
     } catch {
       readState = '読みの準備に失敗しました';
+      readFrac = null;
     } finally {
       readingBusy = false;
       attachReadings();
@@ -733,6 +822,8 @@ onmessage = function (e) {
   function renderMeta() {
     el.metaCount.textContent = songs.length ? `${songs.length}曲(ANOTHER / LEGGENDARIA)` + (readState ? ` ・${readState}` : '') : '';
     el.metaTime.textContent = fmtTime(fetchedAt);
+    el.prog.hidden = readFrac === null;
+    if (readFrac !== null) el.progBar.style.width = Math.round(readFrac * 100) + '%';
   }
 
   function search(query) {
