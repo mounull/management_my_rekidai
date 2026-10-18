@@ -182,7 +182,7 @@
   'use strict';
 
   // ===== 設定値(必要ならここだけ変更) =====
-  const API_BASE = 'https://bpi2.poyashi.me';
+  const API_BASE = 'https://bpi2.poyashi.me/api/v1';
   // ユーザー情報取得APIのパス候補(ドキュメントで確認したものに合わせて先頭を直してください)
   const ME_PATH_CANDIDATES = ['/auth/me', '/auth/user', '/users/me', '/me'];
   // 表示する難易度(APIのdifficulty文字列を正規化して前方一致)
@@ -479,7 +479,7 @@
         if (id) { el.uid.value = id; el.uidMsg.textContent = 'ユーザーIDを取得しました。'; return; }
       } catch { /* 次の候補へ */ }
     }
-    el.uidMsg.textContent = '自動取得できませんでした。手入力してください(ソース上部の ME_PATH_CANDIDATES を実際のパスに直すと動きます)。';
+    el.uidMsg.textContent = '自動取得できませんでした。BPIM2にログインして自分のページを開き、URLの /users/ の次の部分をコピーして貼り付けてください。';
   }
 
   // ===== イベント =====
