@@ -167,6 +167,10 @@
       <h1>設定</h1>
       <p>入力した内容はこのiPhone(ブラウザ)の中だけに保存されます。</p>
 
+      <label for="apiBase">APIのURL(中継を使う場合)</label>
+      <input id="apiBase" class="field" type="url" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://xxxx.workers.dev/api/v1">
+      <div class="hint">空欄なら公式APIへ直接アクセスします。通信失敗になる場合は、中継(Cloudflare Workers)のURLの末尾に /api/v1 を付けて入れてください。</div>
+
       <label for="token">APIトークン</label>
       <input id="token" class="field" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Bearerトークンを貼り付け">
 
@@ -194,7 +198,7 @@
   'use strict';
 
   // ===== 設定値(必要ならここだけ変更) =====
-  const API_BASE = 'https://bpi2.poyashi.me/api/v1';
+  const DEFAULT_API_BASE = 'https://bpi2.poyashi.me/api/v1'; // 直接アクセス(CORSで弾かれる場合は設定で中継URLに切替)
   // ユーザー情報取得APIのパス候補(ドキュメントで確認したものに合わせて先頭を直してください)
   const ME_PATH_CANDIDATES = ['/auth/me', '/auth/user', '/auth/whoami', '/auth/profile', '/users/me', '/me'];
   // 表示する難易度(APIのdifficulty文字列を正規化して前方一致)
@@ -207,6 +211,7 @@
   const LS_TOKEN = 'bpim2.token';
   const LS_UID = 'bpim2.uid';
   const LS_DATA = 'bpim2.data.v1';
+  const LS_BASE = 'bpim2.base';
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -214,7 +219,7 @@
     q: $('q'), results: $('results'), error: $('error'),
     metaCount: $('metaCount'), metaTime: $('metaTime'),
     token: $('token'), uid: $('uid'), uidMsg: $('uidMsg'), uidDiag: $('uidDiag'), settingsMsg: $('settingsMsg'),
-    errorMsg: $('errorMsg'), errorDetail: $('errorDetail'), errorPre: $('errorPre'),
+    apiBase: $('apiBase'), errorMsg: $('errorMsg'), errorDetail: $('errorDetail'), errorPre: $('errorPre'),
     btnRefresh: $('btnRefresh'), btnSettings: $('btnSettings'),
     btnSave: $('btnSave'), btnBack: $('btnBack'), btnClear: $('btnClear'), btnAutoUid: $('btnAutoUid'),
   };
@@ -225,6 +230,9 @@
     set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
+
+  let API_BASE = store.get(LS_BASE) || DEFAULT_API_BASE;
+  function applyBase(v) { API_BASE = v || DEFAULT_API_BASE; }
 
   // ===== 正規化(大文字小文字・全角半角・ひらがなカタカナ) =====
   function normalize(s) {
@@ -337,7 +345,7 @@
     // 通信そのものが失敗
     if (r.netError) {
       throw new AppError('network', '通信できませんでした(オフライン / CORS / URL誤りのいずれか)。',
-        `${head}\nfetch失敗: ${r.netError}\n※ブラウザはこの3つを区別できません。機内モードやWi-Fi不調でなければ、API側がブラウザからのアクセスを許可していない(CORS)可能性が高いです。`);
+        `${head}\nfetch失敗: ${r.netError}\n※ブラウザはこの3つを区別できません。機内モードやWi-Fi不調でなければ、API側がブラウザからのアクセスを許可していない(CORS)可能性が高いです。その場合は設定の「APIのURL」に中継(Cloudflare Workers)のURLを入れてください。`);
     }
 
     // HTTPエラー
@@ -530,6 +538,7 @@
     if (view === 'settings') {
       el.token.value = store.get(LS_TOKEN) || '';
       el.uid.value = store.get(LS_UID) || '';
+      el.apiBase.value = store.get(LS_BASE) || '';
       el.uidMsg.textContent = '';
       el.settingsMsg.hidden = true;
     } else {
@@ -577,6 +586,7 @@
   }
 
   async function autoUid() {
+    applyBase(el.apiBase.value.trim().replace(/\/+$/, ''));
     const token = el.token.value.trim();
     const log = [];
     const done = (msg) => {
@@ -639,7 +649,7 @@
     const all404 = results.every((r) => r.status === 404);
     const anyOkNoId = results.some((r) => r.ok && r.json !== undefined);
     let why;
-    if (allNet) why = 'どの候補にも通信できませんでした(オフラインまたはCORSの可能性)。';
+    if (allNet) why = 'どの候補にも通信できませんでした(オフラインまたはCORSの可能性。中継URLの設定が必要かもしれません)。';
     else if (all404) why = '候補のパスがすべて404でした。ユーザー情報APIのパスが候補と違います。';
     else if (anyOkNoId) why = '応答は返りましたが、ユーザーIDの項目が見つかりません(下のキー一覧を確認)。';
     else why = '候補のパスでは取得できませんでした(下の診断を確認)。';
@@ -665,7 +675,16 @@
       el.settingsMsg.hidden = false;
       return;
     }
-    if (!store.set(LS_TOKEN, token) || !store.set(LS_UID, uid)) {
+    const baseIn = el.apiBase.value.trim().replace(/\/+$/, '');
+    if (baseIn && !/^https:\/\//.test(baseIn)) {
+      el.settingsMsg.textContent = 'APIのURLは https:// から始めてください。';
+      el.settingsMsg.hidden = false;
+      return;
+    }
+    const saved = store.set(LS_TOKEN, token) && store.set(LS_UID, uid);
+    if (baseIn) store.set(LS_BASE, baseIn); else store.del(LS_BASE);
+    applyBase(baseIn);
+    if (!saved) {
       el.settingsMsg.textContent = 'この端末では保存できませんでした(プライベートブラウズ中の可能性があります)。';
       el.settingsMsg.hidden = false;
       return;
