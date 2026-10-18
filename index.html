@@ -141,8 +141,7 @@
   .prog { height: 4px; border-radius: 2px; background: var(--line); margin-top: 8px; overflow: hidden; }
   .prog > div { height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
   .tag { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-left: 8px; vertical-align: middle; white-space: nowrap; }
-  .tools { padding: 2px 0 6px; border-top: 1px solid var(--line); }
-  .alias-btn { background: none; border: 0; color: var(--accent); font-size: 13px; padding: 8px 0 4px; cursor: pointer; }
+  .song h2[role=button] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .song { transition: none; } }
 </style>
@@ -525,18 +524,29 @@
     return a === b ? [a] : [a, b];
   }
 
-  // 0: 不一致 / 1: 曲名で一致 / 2: 読みで一致(曲名だけでは一致しない語がある)
+  // 比較用キー: 厳密(ー・っを残す) / 濁点無視 / さらに ー・っも無視
+  function keyStrict(s) { return toHira(s).replace(/[^ぁ-ゖーa-z0-9\u4e00-\u9fff]/g, ''); }
+  function keyVoice(s) { return [...keyStrict(s)].map((c) => DEVOICE[c] || c).join(''); }
+
+  // 0: 不一致 / 1: 曲名で一致 / 2: 読みで一致 / 3: 濁点違いを許して一致 / 4: 長音・促音も無視して一致
+  // (全語のうち最もゆるい段階を返す)
   function songMatches(song, tokens) {
-    let via = 1;
+    let worst = 1;
     for (const t of tokens) {
       if (song.norm.includes(t)) continue;
+      let tier = 0;
       if (/^[ぁ-ゖー]+$/.test(t)) {
-        const lt = loose(t);
-        if (lt.length >= 2 && (song.keys || []).some((k) => k.includes(lt))) { via = 2; continue; }
+        const k1 = keyStrict(t);
+        const k2 = keyVoice(t);
+        const k3 = loose(t);
+        if (k1.length >= 2 && (song.keys1 || []).some((k) => k.includes(k1))) tier = 2;
+        else if (k2.length >= 2 && (song.keys2 || []).some((k) => k.includes(k2))) tier = 3;
+        else if (k3.length >= 3 && (song.keys3 || []).some((k) => k.includes(k3))) tier = 4;
       }
-      return 0;
+      if (!tier) return 0;
+      if (tier > worst) worst = tier;
     }
-    return via;
+    return worst;
   }
   // </READING-CORE>
 
@@ -724,7 +734,10 @@ onmessage = function (e) {
     const rm = loadJson(LS_READ);
     for (const sg of songs) {
       const al = [...(BUILTIN_ALIASES[sg.title] || []), ...(aliasMap[sg.title] || [])];
-      sg.keys = [...(rm[sg.title] || []), ...al].map(loose).filter(Boolean);
+      const all = [...(rm[sg.title] || []), ...al];
+      sg.keys1 = all.map(keyStrict).filter(Boolean);
+      sg.keys2 = all.map(keyVoice).filter(Boolean);
+      sg.keys3 = all.map(loose).filter(Boolean);
     }
   }
 
@@ -830,21 +843,24 @@ onmessage = function (e) {
     const tokens = normalize(query).split(' ').filter(Boolean);
     if (!tokens.length) return [];
     const first = tokens[0];
-    const lf = /^[ぁ-ゖー]+$/.test(first) ? loose(first) : '';
     const hits = [];
+    let best = 99;
     for (const sg of songs) {
       const m = songMatches(sg, tokens);
       if (!m) continue;
-      sg.viaReading = m === 2;
-      // 0: 曲名で一致 / 1: 読みの先頭一致 / 2: 読みの途中一致
-      sg.rank = m === 1 ? 0 : (lf && (sg.keys || []).some((k) => k.startsWith(lf)) ? 1 : 2);
+      sg.tier = m;
       hits.push(sg);
+      if (m < best) best = m;
     }
-    hits.sort((a, b) => {
+    // 厳しい段階で見つかった場合、いちばんゆるい段階(4)の曲は出さない(ノイズ対策)
+    const shown = best >= 4 ? hits : hits.filter((sg) => sg.tier <= 3);
+    shown.sort((a, b) => {
       const ap = a.norm.startsWith(first) ? 0 : 1;
       const bp = b.norm.startsWith(first) ? 0 : 1;
-      return a.rank - b.rank || ap - bp || a.norm.localeCompare(b.norm, 'ja');
+      return a.tier - b.tier || ap - bp || a.norm.localeCompare(b.norm, 'ja');
     });
+    hits.length = 0;
+    hits.push(...shown);
     return hits;
   }
 
@@ -862,7 +878,7 @@ onmessage = function (e) {
     if (!normalize(query)) {
       const p = document.createElement('p');
       p.className = 'notice';
-      p.textContent = '曲名の一部を入力すると、EXスコアが表示されます。ひらがなでも探せます(例: ひみこ、すーぱー)。';
+      p.textContent = '曲名の一部を入力すると、EXスコアが表示されます。ひらがなでも探せます(例: ひみこ、すーぱー)。曲名をタップすると、読みを登録できます。';
       el.results.append(p);
       return;
     }
@@ -883,12 +899,19 @@ onmessage = function (e) {
 
       const h = document.createElement('h2');
       h.textContent = s.title;
-      if (s.viaReading) {
+      if (s.tier >= 2) {
         const tag = document.createElement('span');
         tag.className = 'tag';
-        tag.textContent = '読み一致';
+        tag.textContent = s.tier === 4 ? '読み(あいまい)' : '読み一致';
         h.append(tag);
       }
+      // 曲名をタップすると読みを登録できる
+      h.setAttribute('role', 'button');
+      h.tabIndex = 0;
+      h.addEventListener('click', () => editAlias(s));
+      h.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editAlias(s); }
+      });
       card.append(h);
 
       for (const r of s.rows) {
@@ -916,7 +939,7 @@ onmessage = function (e) {
         bpiV.textContent = fmtBpi(r.bpi);
         bpi.append(bpiV);
         const ver = document.createElement('span');
-        ver.append('更新 ');
+        ver.append('バージョン ');
         const verV = document.createElement('b');
         verV.textContent = r.version || '-';
         ver.append(verV);
@@ -925,16 +948,6 @@ onmessage = function (e) {
         row.append(d, ex, sub);
         card.append(row);
       }
-      const tools = document.createElement('div');
-      tools.className = 'tools';
-      const ab = document.createElement('button');
-      ab.type = 'button';
-      ab.className = 'alias-btn';
-      ab.textContent = (aliasMap[s.title] || []).length ? '読みを編集' : '読みを追加';
-      ab.setAttribute('aria-label', `${s.title}の読みを登録`);
-      ab.addEventListener('click', () => editAlias(s));
-      tools.append(ab);
-      card.append(tools);
       frag.append(card);
     }
     if (hits.length > MAX_RESULTS) {
