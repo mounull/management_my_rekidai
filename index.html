@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="自己歴代">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141a26" media="(prefers-color-scheme: dark)">
+<title>自己歴代</title>
+<style>
+  :root {
+    --bg: #eef1f6;
+    --surface: #ffffff;
+    --ink: #1b2433;
+    --muted: #66708a;
+    --line: #d6dce8;
+    --accent: #3a56d4;
+    --another: #d6403f;
+    --legg: #9a48d0;
+    --warn-bg: #fff1ee;
+    --warn-ink: #9c2a1c;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141a26;
+      --surface: #1e2636;
+      --ink: #e8ecf5;
+      --muted: #97a1ba;
+      --line: #2e374b;
+      --accent: #8fa4ff;
+      --another: #ff7a78;
+      --legg: #c58cf2;
+      --warn-bg: #3a1f1c;
+      --warn-ink: #ffb4a8;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    line-height: 1.5;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 48px; }
+
+  .bar {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--bg);
+    padding: 12px 0 10px;
+  }
+  .search { display: flex; gap: 8px; }
+  .search input {
+    flex: 1; min-width: 0;
+    font-size: 17px; /* 16px以上でiOSの自動ズームを防ぐ */
+    padding: 13px 14px;
+    border: 1.5px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+    -webkit-appearance: none; appearance: none;
+  }
+  .search input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  .icon-btn {
+    flex: none;
+    width: 48px;
+    border: 1.5px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 18px;
+    cursor: pointer;
+  }
+  .icon-btn:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .meta { margin: 8px 2px 0; font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
+  .song {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 16px 6px;
+    margin-top: 12px;
+  }
+  .song h2 { margin: 0 0 6px; font-size: 17px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: 2px 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+  }
+  .row:first-of-type { border-top: 0; }
+  .diff { font-size: 14px; font-weight: 650; }
+  .diff small { font-weight: 500; color: var(--muted); margin-left: 4px; }
+  .diff.A { color: var(--another); }
+  .diff.L { color: var(--legg); }
+  .ex { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; text-align: right; line-height: 1.1; }
+  .sub { grid-column: 1 / -1; font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .sub b { color: var(--ink); font-weight: 600; }
+
+  .notice { margin-top: 24px; color: var(--muted); font-size: 15px; }
+  .error {
+    margin-top: 12px; padding: 12px 14px; border-radius: 12px;
+    background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; overflow-wrap: anywhere;
+  }
+
+  /* 設定 */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 16px; margin-top: 20px; }
+  .panel h1 { margin: 0 0 4px; font-size: 20px; }
+  .panel p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
+  .field { width: 100%; font-size: 16px; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
+  .field:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  .inline { display: flex; gap: 8px; }
+  .inline .field { flex: 1; min-width: 0; }
+  .btn { font-size: 15px; font-weight: 600; padding: 12px 16px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color: #0e1424; } }
+  .btn.danger { color: var(--warn-ink); }
+  .actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) { .song { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 検索画面 -->
+  <section id="viewSearch" hidden>
+    <div class="bar">
+      <div class="search">
+        <input id="q" type="search" inputmode="search" enterkeyhint="search"
+               placeholder="曲名を入力" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="曲名で検索">
+        <button id="btnRefresh" class="icon-btn" type="button" aria-label="データを更新" title="データを更新">↻</button>
+        <button id="btnSettings" class="icon-btn" type="button" aria-label="設定" title="設定">⚙</button>
+      </div>
+      <div class="meta"><span id="metaCount"></span><span id="metaTime"></span></div>
+    </div>
+    <div id="error" class="error" hidden></div>
+    <div id="results"></div>
+  </section>
+
+  <!-- 設定画面 -->
+  <section id="viewSettings" hidden>
+    <div class="panel">
+      <h1>設定</h1>
+      <p>入力した内容はこのiPhone(ブラウザ)の中だけに保存されます。</p>
+
+      <label for="token">APIトークン</label>
+      <input id="token" class="field" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Bearerトークンを貼り付け">
+
+      <label for="uid">ユーザーID</label>
+      <div class="inline">
+        <input id="uid" class="field" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="自動取得 or 手入力">
+        <button id="btnAutoUid" class="btn" type="button">自動取得</button>
+      </div>
+      <div id="uidMsg" class="hint"></div>
+
+      <div class="actions">
+        <button id="btnSave" class="btn primary" type="button">保存して取得</button>
+        <button id="btnBack" class="btn" type="button">戻る</button>
+        <button id="btnClear" class="btn danger" type="button">保存データを削除</button>
+      </div>
+      <div id="settingsMsg" class="error" hidden></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ===== 設定値(必要ならここだけ変更) =====
+  const API_BASE = 'https://bpi2.poyashi.me';
+  // ユーザー情報取得APIのパス候補(ドキュメントで確認したものに合わせて先頭を直してください)
+  const ME_PATH_CANDIDATES = ['/auth/me', '/auth/user', '/users/me', '/me'];
+  // 表示する難易度(APIのdifficulty文字列を正規化して前方一致)
+  const SHOW_DIFFICULTIES = [
+    { key: 'A', match: ['ANOTHER'], label: 'ANOTHER' },
+    { key: 'L', match: ['LEGGENDARIA', 'LEGENDARIA'], label: 'LEGGENDARIA' },
+  ];
+  const MAX_RESULTS = 40;
+
+  const LS_TOKEN = 'bpim2.token';
+  const LS_UID = 'bpim2.uid';
+  const LS_DATA = 'bpim2.data.v1';
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    viewSearch: $('viewSearch'), viewSettings: $('viewSettings'),
+    q: $('q'), results: $('results'), error: $('error'),
+    metaCount: $('metaCount'), metaTime: $('metaTime'),
+    token: $('token'), uid: $('uid'), uidMsg: $('uidMsg'), settingsMsg: $('settingsMsg'),
+    btnRefresh: $('btnRefresh'), btnSettings: $('btnSettings'),
+    btnSave: $('btnSave'), btnBack: $('btnBack'), btnClear: $('btnClear'), btnAutoUid: $('btnAutoUid'),
+  };
+
+  // ===== localStorage(失敗しても動くように) =====
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  // ===== 正規化(大文字小文字・全角半角・ひらがなカタカナ) =====
+  function normalize(s) {
+    return String(s ?? '')
+      .normalize('NFKC')                 // 全角英数→半角、半角カナ→全角カナ など
+      .toLowerCase()
+      .replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)) // カタカナ→ひらがな
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function diffInfo(raw) {
+    const d = normalize(raw).toUpperCase();
+    for (const t of SHOW_DIFFICULTIES) {
+      if (t.match.some((m) => d.startsWith(m))) return t;
+    }
+    return null;
+  }
+
+  // ===== データ =====
+  let songs = []; // [{title, norm, rows:[{key,label,level,ex,bpi,version}]}]
+  let fetchedAt = null;
+
+  function buildSongs(raw) {
+    const map = new Map();
+    for (const r of raw) {
+      const info = diffInfo(r.difficulty);
+      if (!info || !r.title) continue;
+      let s = map.get(r.title);
+      if (!s) { s = { title: r.title, norm: normalize(r.title), rows: [] }; map.set(r.title, s); }
+      s.rows.push({
+        key: info.key, label: info.label,
+        level: r.difficultyLevel ?? null,
+        ex: r.bestExScore ?? null,
+        bpi: r.bestBpi ?? null,
+        version: r.bestVersion ?? '',
+      });
+    }
+    const list = [...map.values()];
+    for (const s of list) s.rows.sort((a, b) => (a.key === b.key ? 0 : a.key === 'A' ? -1 : 1));
+    list.sort((a, b) => a.norm.localeCompare(b.norm, 'ja'));
+    return list;
+  }
+
+  function saveCache(raw) {
+    // 保存容量を抑えるため必要な項目だけ残す
+    const slim = raw.map((r) => ({
+      title: r.title, difficulty: r.difficulty, difficultyLevel: r.difficultyLevel,
+      bestExScore: r.bestExScore, bestBpi: r.bestBpi, bestVersion: r.bestVersion,
+    }));
+    store.set(LS_DATA, JSON.stringify({ at: Date.now(), data: slim }));
+  }
+
+  function loadCache() {
+    const t = store.get(LS_DATA);
+    if (!t) return false;
+    try {
+      const o = JSON.parse(t);
+      songs = buildSongs(o.data || []);
+      fetchedAt = o.at || null;
+      return songs.length > 0;
+    } catch { return false; }
+  }
+
+  async function fetchBestEver() {
+    const token = store.get(LS_TOKEN);
+    const uid = store.get(LS_UID);
+    if (!token || !uid) throw new AppError('setup', 'トークンとユーザーIDを設定してください。');
+
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/users/${encodeURIComponent(uid)}/scores/best-ever`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (e) {
+      throw new AppError('network', '通信に失敗しました。電波状況を確認してください。改善しない場合、ブラウザからのアクセスがAPI側で許可されていない(CORS)可能性があります。');
+    }
+    if (res.status === 401) throw new AppError('auth', 'トークンが無効か期限切れです。設定で入れ直してください。');
+    if (res.status === 403) throw new AppError('auth', 'このトークンではアクセスできません(403)。');
+    if (res.status === 404) throw new AppError('setup', 'ユーザーが見つかりません。ユーザーIDを確認してください。');
+    if (!res.ok) throw new AppError('http', `APIエラー(${res.status})`);
+
+    const raw = await res.json();
+    if (!Array.isArray(raw)) throw new AppError('http', '想定外のレスポンス形式です。');
+    saveCache(raw);
+    songs = buildSongs(raw);
+    fetchedAt = Date.now();
+  }
+
+  class AppError extends Error {
+    constructor(kind, msg) { super(msg); this.kind = kind; }
+  }
+
+  // ===== 表示 =====
+  function showError(msg) {
+    el.error.textContent = msg;
+    el.error.hidden = !msg;
+  }
+
+  function fmtTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `更新 ${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  function fmtBpi(v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
+    return Number(v).toFixed(2);
+  }
+
+  function renderMeta() {
+    el.metaCount.textContent = songs.length ? `${songs.length}曲(ANOTHER / LEGGENDARIA)` : '';
+    el.metaTime.textContent = fmtTime(fetchedAt);
+  }
+
+  function search(query) {
+    const tokens = normalize(query).split(' ').filter(Boolean);
+    if (!tokens.length) return [];
+    const hits = songs.filter((s) => tokens.every((t) => s.norm.includes(t)));
+    const first = tokens[0];
+    hits.sort((a, b) => {
+      const ap = a.norm.startsWith(first) ? 0 : 1;
+      const bp = b.norm.startsWith(first) ? 0 : 1;
+      return ap - bp || a.norm.localeCompare(b.norm, 'ja');
+    });
+    return hits;
+  }
+
+  function renderResults() {
+    const query = el.q.value;
+    el.results.textContent = '';
+
+    if (!songs.length) {
+      const p = document.createElement('p');
+      p.className = 'notice';
+      p.textContent = 'データがありません。右上の更新ボタンで取得してください。';
+      el.results.append(p);
+      return;
+    }
+    if (!normalize(query)) {
+      const p = document.createElement('p');
+      p.className = 'notice';
+      p.textContent = '曲名の一部を入力すると、EXスコアが表示されます。';
+      el.results.append(p);
+      return;
+    }
+
+    const hits = search(query);
+    if (!hits.length) {
+      const p = document.createElement('p');
+      p.className = 'notice';
+      p.textContent = '一致する曲がありません。';
+      el.results.append(p);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const s of hits.slice(0, MAX_RESULTS)) {
+      const card = document.createElement('article');
+      card.className = 'song';
+
+      const h = document.createElement('h2');
+      h.textContent = s.title;
+      card.append(h);
+
+      for (const r of s.rows) {
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const d = document.createElement('div');
+        d.className = `diff ${r.key}`;
+        d.textContent = r.label;
+        if (r.level !== null) {
+          const lv = document.createElement('small');
+          lv.textContent = `☆${r.level}`;
+          d.append(lv);
+        }
+
+        const ex = document.createElement('div');
+        ex.className = 'ex';
+        ex.textContent = r.ex === null ? '-' : String(r.ex);
+
+        const sub = document.createElement('div');
+        sub.className = 'sub';
+        const bpi = document.createElement('span');
+        bpi.append('BPI ');
+        const bpiV = document.createElement('b');
+        bpiV.textContent = fmtBpi(r.bpi);
+        bpi.append(bpiV);
+        const ver = document.createElement('span');
+        ver.append('更新 ');
+        const verV = document.createElement('b');
+        verV.textContent = r.version || '-';
+        ver.append(verV);
+        sub.append(bpi, ver);
+
+        row.append(d, ex, sub);
+        card.append(row);
+      }
+      frag.append(card);
+    }
+    if (hits.length > MAX_RESULTS) {
+      const p = document.createElement('p');
+      p.className = 'notice';
+      p.textContent = `他${hits.length - MAX_RESULTS}件。もう少し絞り込んでください。`;
+      frag.append(p);
+    }
+    el.results.append(frag);
+  }
+
+  // ===== 画面切替 =====
+  function show(view) {
+    el.viewSearch.hidden = view !== 'search';
+    el.viewSettings.hidden = view !== 'settings';
+    if (view === 'settings') {
+      el.token.value = store.get(LS_TOKEN) || '';
+      el.uid.value = store.get(LS_UID) || '';
+      el.uidMsg.textContent = '';
+      el.settingsMsg.hidden = true;
+    } else {
+      el.q.focus({ preventScroll: true });
+    }
+  }
+
+  async function refresh({ silent = false } = {}) {
+    el.btnRefresh.disabled = true;
+    el.btnRefresh.textContent = '…';
+    if (!silent) showError('');
+    try {
+      await fetchBestEver();
+      showError('');
+      renderMeta();
+      renderResults();
+    } catch (e) {
+      showError(e.message || '取得に失敗しました。');
+      if (e.kind === 'auth' || e.kind === 'setup') {
+        // 設定の見直しが必要
+        if (!songs.length) show('settings');
+      }
+    } finally {
+      el.btnRefresh.disabled = false;
+      el.btnRefresh.textContent = '↻';
+    }
+  }
+
+  // ===== ユーザーID自動取得 =====
+  function pickId(o) {
+    if (!o || typeof o !== 'object') return null;
+    const cands = [o.userId, o.uid, o.id, o.user && (o.user.userId || o.user.uid || o.user.id)];
+    const v = cands.find((x) => x !== undefined && x !== null && x !== '');
+    return v === undefined ? null : String(v);
+  }
+
+  async function autoUid() {
+    const token = el.token.value.trim();
+    if (!token) { el.uidMsg.textContent = '先にトークンを入力してください。'; return; }
+    el.uidMsg.textContent = '取得中…';
+    for (const p of ME_PATH_CANDIDATES) {
+      try {
+        const res = await fetch(`${API_BASE}${p}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.status === 401) { el.uidMsg.textContent = 'トークンが無効です。'; return; }
+        if (!res.ok) continue;
+        const id = pickId(await res.json());
+        if (id) { el.uid.value = id; el.uidMsg.textContent = 'ユーザーIDを取得しました。'; return; }
+      } catch { /* 次の候補へ */ }
+    }
+    el.uidMsg.textContent = '自動取得できませんでした。手入力してください(ソース上部の ME_PATH_CANDIDATES を実際のパスに直すと動きます)。';
+  }
+
+  // ===== イベント =====
+  let timer = null;
+  el.q.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(renderResults, 60);
+  });
+  el.btnRefresh.addEventListener('click', () => refresh());
+  el.btnSettings.addEventListener('click', () => show('settings'));
+  el.btnBack.addEventListener('click', () => show('search'));
+  el.btnAutoUid.addEventListener('click', autoUid);
+
+  el.btnSave.addEventListener('click', async () => {
+    const token = el.token.value.trim();
+    const uid = el.uid.value.trim();
+    if (!token || !uid) {
+      el.settingsMsg.textContent = 'トークンとユーザーIDの両方を入力してください。';
+      el.settingsMsg.hidden = false;
+      return;
+    }
+    if (!store.set(LS_TOKEN, token) || !store.set(LS_UID, uid)) {
+      el.settingsMsg.textContent = 'この端末では保存できませんでした(プライベートブラウズ中の可能性があります)。';
+      el.settingsMsg.hidden = false;
+      return;
+    }
+    show('search');
+    await refresh();
+  });
+
+  el.btnClear.addEventListener('click', () => {
+    if (!confirm('保存したトークン・ユーザーID・スコアデータを削除します。よろしいですか?')) return;
+    store.del(LS_TOKEN); store.del(LS_UID); store.del(LS_DATA);
+    songs = []; fetchedAt = null;
+    el.token.value = ''; el.uid.value = '';
+    renderMeta(); renderResults();
+    el.settingsMsg.textContent = '削除しました。';
+    el.settingsMsg.hidden = false;
+  });
+
+  // ===== 起動 =====
+  const hasAuth = !!(store.get(LS_TOKEN) && store.get(LS_UID));
+  if (!hasAuth) {
+    show('settings');
+  } else {
+    show('search');
+    if (loadCache()) {
+      renderMeta();
+      renderResults();
+    } else {
+      renderResults();
+      refresh();
+    }
+  }
+})();
+</script>
+</body>
+</html>
