@@ -12,6 +12,8 @@
 <meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#141a26" media="(prefers-color-scheme: dark)">
 <title>自己歴代</title>
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <style>
   :root {
     --bg: #eef1f6;
@@ -136,6 +138,9 @@
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
   }
   .error details summary { cursor: pointer; margin-top: 8px; font-weight: 600; }
+  .tag { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-left: 8px; vertical-align: middle; white-space: nowrap; }
+  .tools { padding: 2px 0 6px; border-top: 1px solid var(--line); }
+  .alias-btn { background: none; border: 0; color: var(--accent); font-size: 13px; padding: 8px 0 4px; cursor: pointer; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: no-preference) { .song { transition: none; } }
 </style>
@@ -148,7 +153,7 @@
     <div class="bar">
       <div class="search">
         <input id="q" type="search" inputmode="search" enterkeyhint="search"
-               placeholder="曲名を入力" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="曲名で検索">
+               placeholder="曲名(ひらがなでもOK)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="曲名で検索">
         <button id="btnRefresh" class="icon-btn" type="button" aria-label="データを更新" title="データを更新">↻</button>
         <button id="btnSettings" class="icon-btn" type="button" aria-label="設定" title="設定">⚙</button>
       </div>
@@ -296,6 +301,7 @@
     try {
       const o = JSON.parse(t);
       songs = buildSongs(o.data || []);
+      attachReadings();
       fetchedAt = o.at || null;
       return songs.length > 0;
     } catch { return false; }
@@ -418,7 +424,219 @@
 
     saveCache(raw);
     songs = list;
+    attachReadings();
     fetchedAt = Date.now();
+  }
+
+
+  // <READING-CORE>
+  const KANJI = /[\u4e00-\u9fff々〆ヶ]/;
+  const DEVOICE_FROM = 'がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽゔ';
+  const DEVOICE_TO = 'かきくけこさしすせそたちつてとはひふへほはひふへほう';
+  const DEVOICE = {};
+  [...DEVOICE_FROM].forEach((c, i) => { DEVOICE[c] = DEVOICE_TO[i]; });
+
+  // カタカナ→ひらがな(全角半角・大文字小文字も統一)
+  function toHira(s) {
+    return String(s ?? '').normalize('NFKC').toLowerCase()
+      .replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  }
+
+  // 濁点・半濁点・長音・促音の違いを吸収した比較用キー
+  function loose(s) {
+    return [...toHira(s)].map((c) => DEVOICE[c] || c).join('')
+      .replace(/[ーっ]/g, '')
+      .replace(/[^ぁ-ゖa-z0-9\u4e00-\u9fff]/g, '');
+  }
+
+  // 辞書にない英単語用の、綴りに沿った簡易カナ変換(asian → あしあん)
+  const ROWS = {
+    k: [...'かきくけこ'], s: [...'さしすせそ'], t: [...'たちつてと'], n: [...'なにぬねの'],
+    h: [...'はひふへほ'], m: [...'まみむめも'], r: [...'らりるれろ'], g: [...'がぎぐげご'],
+    z: [...'ざじずぜぞ'], d: [...'だぢづでど'], b: [...'ばびぶべぼ'], p: [...'ぱぴぷぺぽ'],
+    v: [...'ばびぶべぼ'], y: [...'やいゆえよ'],
+    f: 'ふぁ,ふぃ,ふ,ふぇ,ふぉ'.split(','), w: 'わ,うぃ,う,うぇ,うぉ'.split(','),
+    j: 'じゃ,じ,じゅ,じぇ,じょ'.split(','), sh: 'しゃ,し,しゅ,しぇ,しょ'.split(','),
+    ch: 'ちゃ,ち,ちゅ,ちぇ,ちょ'.split(','),
+  };
+  const SOLO = {
+    k: 'く', s: 'す', t: 'と', n: 'ん', h: 'ふ', m: 'む', r: 'る', g: 'ぐ', z: 'ず', d: 'ど',
+    b: 'ぶ', p: 'ぷ', v: 'ぶ', y: 'い', f: 'ふ', w: 'う', j: 'じ', sh: 'し', ch: 'ち',
+  };
+  function naiveKana(word) {
+    const w = String(word).toLowerCase().replace(/[^a-z]/g, '');
+    const VI = { a: 0, i: 1, u: 2, e: 3, o: 4 };
+    const VOW = 'あいうえお';
+    let out = '';
+    let i = 0;
+    while (i < w.length) {
+      const c = w[i];
+      if (c in VI) { out += VOW[VI[c]]; i++; continue; }
+      let key = c;
+      let len = 1;
+      const two = w.slice(i, i + 2);
+      if (two === 'sh' || two === 'ch') { key = two; len = 2; }
+      else if (two === 'th') { key = 's'; len = 2; }
+      else if (two === 'ph') { key = 'f'; len = 2; }
+      else if (two === 'wh') { key = 'w'; len = 2; }
+      else if (two === 'ck') { key = 'k'; len = 2; }
+      else if (c === 'c') { key = 'iey'.includes(w[i + 1] || '-') ? 's' : 'k'; }
+      else if (c === 'l') { key = 'r'; }
+      else if (c === 'q' || c === 'x') { key = 'k'; }
+      if (len === 1 && c !== 'n' && w[i + 1] === c) { out += 'っ'; i++; continue; }
+      const next = w[i + len];
+      if (next in VI && ROWS[key]) { out += ROWS[key][VI[next]]; i += len + 1; }
+      else { out += SOLO[key] || ''; i += len; }
+    }
+    return out;
+  }
+
+  // 漢字を含む部分は形態素解析の読みを使う(tk が無ければそのまま)
+  function jaToHira(seg, tk) {
+    if (tk && KANJI.test(seg)) {
+      return tk.tokenize(seg)
+        .map((t) => toHira(t.reading && t.reading !== '*' ? t.reading : t.surface_form))
+        .join('');
+    }
+    return toHira(seg);
+  }
+
+  // 曲名 → ひらがなの読み候補(辞書の読み / 綴りどおりの読み)
+  function readingsFor(title, tk, eng) {
+    const parts = String(title).normalize('NFKC').split(/([A-Za-z]+)/);
+    let a = '';
+    let b = '';
+    for (const p of parts) {
+      if (!p) continue;
+      if (/^[A-Za-z]+$/.test(p)) {
+        const nk = naiveKana(p);
+        const dk = eng ? eng[p.toLowerCase()] : null;
+        a += dk ? toHira(dk) : nk;
+        b += nk;
+      } else {
+        const j = jaToHira(p, tk);
+        a += j;
+        b += j;
+      }
+    }
+    return a === b ? [a] : [a, b];
+  }
+
+  // 0: 不一致 / 1: 曲名で一致 / 2: 読みで一致(曲名だけでは一致しない語がある)
+  function songMatches(song, tokens) {
+    let via = 1;
+    for (const t of tokens) {
+      if (song.norm.includes(t)) continue;
+      if (/^[ぁ-ゖー]+$/.test(t)) {
+        const lt = loose(t);
+        if (lt.length >= 2 && (song.keys || []).some((k) => k.includes(lt))) { via = 2; continue; }
+      }
+      return 0;
+    }
+    return via;
+  }
+  // </READING-CORE>
+
+  // ===== 読み(ひらがな検索)の準備 =====
+  const KUROMOJI_JS = 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js';
+  const KUROMOJI_DICT = 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/';
+  const ENG_DICT_URL = 'eng-kana.json'; // index.html と同じ場所に置く
+  const LS_READ = 'bpim2.readings.v1';
+  const LS_ALIAS = 'bpim2.aliases.v1';
+  // 自動の読みが外れる曲の補正(画面の「読みを追加」からも登録できます)
+  const BUILTIN_ALIASES = { '卑弥呼': ['ひみこ'] };
+
+  function loadJson(k) { try { return JSON.parse(store.get(k) || '{}') || {}; } catch { return {}; } }
+  let aliasMap = loadJson(LS_ALIAS);
+  let readState = '';
+  let readingBusy = false;
+  let tokenizerPromise = null;
+  let engPromise = null;
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el2 = document.createElement('script');
+      el2.src = src;
+      el2.onload = resolve;
+      el2.onerror = () => reject(new Error('スクリプトを読み込めません: ' + src));
+      document.head.append(el2);
+    });
+  }
+  function getTokenizer() {
+    if (!tokenizerPromise) {
+      tokenizerPromise = (async () => {
+        await loadScript(KUROMOJI_JS);
+        return await new Promise((resolve, reject) => {
+          kuromoji.builder({ dicPath: KUROMOJI_DICT }).build((e, t) => (e ? reject(e) : resolve(t)));
+        });
+      })().catch((e) => { tokenizerPromise = null; throw e; });
+    }
+    return tokenizerPromise;
+  }
+  function getEngDict() {
+    if (!engPromise) {
+      engPromise = fetch(ENG_DICT_URL).then((r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).catch((e) => { engPromise = null; throw e; });
+    }
+    return engPromise;
+  }
+
+  // 保存済みの読みと、補正(別名)を曲に結び付ける
+  function attachReadings() {
+    const rm = loadJson(LS_READ);
+    for (const sg of songs) {
+      const al = [...(BUILTIN_ALIASES[sg.title] || []), ...(aliasMap[sg.title] || [])];
+      sg.keys = [...(rm[sg.title] || []), ...al].map(loose).filter(Boolean);
+    }
+  }
+
+  // 未計算の曲だけ読みを作って端末に保存(初回のみ少し時間がかかる)
+  async function ensureReadings() {
+    if (readingBusy || !songs.length) return;
+    const rm = loadJson(LS_READ);
+    const missing = songs.filter((sg) => !rm[sg.title]);
+    if (!missing.length) return;
+    readingBusy = true;
+    readState = '読みを準備中…';
+    renderMeta();
+    try {
+      const needJa = missing.some((sg) => KANJI.test(sg.title));
+      const needEn = missing.some((sg) => /[A-Za-z]/.test(sg.title));
+      let tk = null;
+      let eng = null;
+      const notes = [];
+      if (needEn) { try { eng = await getEngDict(); } catch { notes.push('英単語辞書'); } }
+      if (needJa) { try { tk = await getTokenizer(); } catch { notes.push('漢字の読み'); } }
+      const out = { ...rm };
+      for (const sg of missing) {
+        const hasJa = KANJI.test(sg.title);
+        const hasEn = /[A-Za-z]/.test(sg.title);
+        if ((hasJa && !tk) || (hasEn && !eng)) continue; // 材料が揃わない曲は保存せず、次回やり直す
+        out[sg.title] = readingsFor(sg.title, tk, eng);
+      }
+      store.set(LS_READ, JSON.stringify(out));
+      readState = notes.length ? `${notes.join('・')}を取得できず、読み検索は一部のみ` : '';
+    } catch {
+      readState = '読みの準備に失敗しました';
+    } finally {
+      readingBusy = false;
+      attachReadings();
+      renderMeta();
+      renderResults();
+    }
+  }
+
+  function editAlias(sg) {
+    const cur = (aliasMap[sg.title] || []).join('、');
+    const v = prompt(`「${sg.title}」の読みを追加します(ひらがな。複数は「、」区切り。空欄で削除)`, cur);
+    if (v === null) return;
+    const list = v.split(/[,、，\s]+/).map((x) => x.trim()).filter(Boolean);
+    if (list.length) aliasMap[sg.title] = list; else delete aliasMap[sg.title];
+    store.set(LS_ALIAS, JSON.stringify(aliasMap));
+    attachReadings();
+    renderResults();
   }
 
   // ===== 表示 =====
@@ -444,19 +662,28 @@
   }
 
   function renderMeta() {
-    el.metaCount.textContent = songs.length ? `${songs.length}曲(ANOTHER / LEGGENDARIA)` : '';
+    el.metaCount.textContent = songs.length ? `${songs.length}曲(ANOTHER / LEGGENDARIA)` + (readState ? ` ・${readState}` : '') : '';
     el.metaTime.textContent = fmtTime(fetchedAt);
   }
 
   function search(query) {
     const tokens = normalize(query).split(' ').filter(Boolean);
     if (!tokens.length) return [];
-    const hits = songs.filter((s) => tokens.every((t) => s.norm.includes(t)));
     const first = tokens[0];
+    const lf = /^[ぁ-ゖー]+$/.test(first) ? loose(first) : '';
+    const hits = [];
+    for (const sg of songs) {
+      const m = songMatches(sg, tokens);
+      if (!m) continue;
+      sg.viaReading = m === 2;
+      // 0: 曲名で一致 / 1: 読みの先頭一致 / 2: 読みの途中一致
+      sg.rank = m === 1 ? 0 : (lf && (sg.keys || []).some((k) => k.startsWith(lf)) ? 1 : 2);
+      hits.push(sg);
+    }
     hits.sort((a, b) => {
       const ap = a.norm.startsWith(first) ? 0 : 1;
       const bp = b.norm.startsWith(first) ? 0 : 1;
-      return ap - bp || a.norm.localeCompare(b.norm, 'ja');
+      return a.rank - b.rank || ap - bp || a.norm.localeCompare(b.norm, 'ja');
     });
     return hits;
   }
@@ -475,7 +702,7 @@
     if (!normalize(query)) {
       const p = document.createElement('p');
       p.className = 'notice';
-      p.textContent = '曲名の一部を入力すると、EXスコアが表示されます。';
+      p.textContent = '曲名の一部を入力すると、EXスコアが表示されます。ひらがなでも探せます(例: ひみこ、すーぱー)。';
       el.results.append(p);
       return;
     }
@@ -496,6 +723,12 @@
 
       const h = document.createElement('h2');
       h.textContent = s.title;
+      if (s.viaReading) {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = '読み一致';
+        h.append(tag);
+      }
       card.append(h);
 
       for (const r of s.rows) {
@@ -532,6 +765,16 @@
         row.append(d, ex, sub);
         card.append(row);
       }
+      const tools = document.createElement('div');
+      tools.className = 'tools';
+      const ab = document.createElement('button');
+      ab.type = 'button';
+      ab.className = 'alias-btn';
+      ab.textContent = (aliasMap[s.title] || []).length ? '読みを編集' : '読みを追加';
+      ab.setAttribute('aria-label', `${s.title}の読みを登録`);
+      ab.addEventListener('click', () => editAlias(s));
+      tools.append(ab);
+      card.append(tools);
       frag.append(card);
     }
     if (hits.length > MAX_RESULTS) {
@@ -567,6 +810,7 @@
       showError('');
       renderMeta();
       renderResults();
+      ensureReadings();
     } catch (e) {
       showError(e.message || '取得に失敗しました。', e.detail || (e.stack ? String(e.stack).split('\n')[0] : ''));
     } finally {
@@ -722,6 +966,7 @@
     if (loadCache()) {
       renderMeta();
       renderResults();
+      ensureReadings();
     } else {
       renderResults();
       refresh();
