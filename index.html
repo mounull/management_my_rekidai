@@ -212,6 +212,8 @@
   const LS_UID = 'bpim2.uid';
   const LS_DATA = 'bpim2.data.v1';
   const LS_BASE = 'bpim2.base';
+  // APIの必須パラメータ currentVersion に渡すIIDXのバージョン番号。400で弾かれたら次の候補を順に試す
+  const VERSION_CANDIDATES = ['34', '33', '32']; // 先頭が現行(34)
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -231,6 +233,8 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
+  // 貼り付け時の混入対策: 前後の空白・改行、先頭の「Bearer 」を除く
+  function cleanToken(t) { return String(t || '').replace(/\s+/g, ' ').trim().replace(/^bearer\s+/i, '').replace(/\s+/g, ''); }
   let API_BASE = store.get(LS_BASE) || DEFAULT_API_BASE;
   function applyBase(v) { API_BASE = v || DEFAULT_API_BASE; }
 
@@ -328,7 +332,8 @@
   function describe(r) {
     if (r.netError) return `通信失敗 (${r.netError})`;
     const kind = r.jsonError ? `JSONではない: ${clip(r.text, 80)}` : 'JSON';
-    return `HTTP ${r.status} / ${r.ct || 'content-typeなし'} / ${kind}`;
+    const body = (!r.ok && !r.jsonError) ? ` / 応答: ${clip(r.text, 160)}` : '';
+    return `HTTP ${r.status} / ${r.ct || 'content-typeなし'} / ${kind}${body}`;
   }
 
   async function fetchBestEver() {
@@ -338,9 +343,16 @@
       throw new AppError('setup', 'トークンとユーザーIDが未設定です。', '設定画面で両方を入力して「保存して取得」を押してください。');
     }
 
-    const url = `${API_BASE}/users/${encodeURIComponent(uid)}/scores/best-ever`;
-    const r = await probe(url, token);
-    const head = `GET ${r.path}`;
+    const baseUrl = `${API_BASE}/users/${encodeURIComponent(uid)}/scores/best-ever`;
+    const versions = VERSION_CANDIDATES;
+    const tried = [];
+    let r;
+    for (const v of versions) {
+      r = await probe(`${baseUrl}?currentVersion=${encodeURIComponent(v)}`, token);
+      tried.push(`${v}→${r.netError ? '通信失敗' : r.status}`);
+      if (!(r.status === 400 && /currentVersion/i.test(r.text))) break;
+    }
+    const head = `GET ${r.path}` + (tried.length > 1 ? `\ncurrentVersionの試行: ${tried.join(', ')}` : '');
 
     // 通信そのものが失敗
     if (r.netError) {
@@ -351,7 +363,7 @@
     // HTTPエラー
     if (!r.ok) {
       const why = {
-        400: 'リクエストが不正です(400)。ユーザーIDの形式を確認してください。',
+        400: 'リクエストが不正です(400)。詳細の応答メッセージを確認してください。',
         401: 'トークンが無効か期限切れです(401)。',
         403: 'このトークンでは権限がありません(403)。',
         404: 'URLまたはユーザーIDが違います(404)。',
@@ -587,7 +599,7 @@
 
   async function autoUid() {
     applyBase(el.apiBase.value.trim().replace(/\/+$/, ''));
-    const token = el.token.value.trim();
+    const token = cleanToken(el.token.value);
     const log = [];
     const done = (msg) => {
       el.uidMsg.textContent = msg;
@@ -637,10 +649,6 @@
           extra = ` / IDらしい項目なし。キー: ${keys}`;
         }
         log.push(`  GET ${r.path} → ${describe(r)}${extra}`);
-        if (r.status === 401) {
-          done('トークンが無効か期限切れです(401)。トークンを確認してください。');
-          return;
-        }
       }
     }
 
@@ -648,8 +656,10 @@
     const allNet = results.every((r) => r.netError);
     const all404 = results.every((r) => r.status === 404);
     const anyOkNoId = results.some((r) => r.ok && r.json !== undefined);
+    const any401 = results.some((r) => r.status === 401 && !r.jsonError);
     let why;
     if (allNet) why = 'どの候補にも通信できませんでした(オフラインまたはCORSの可能性。中継URLの設定が必要かもしれません)。';
+    else if (any401) why = 'ユーザー情報APIには届きましたが、トークンが受け付けられませんでした(401)。トークンの種類・コピーミス・期限を確認してください。';
     else if (all404) why = '候補のパスがすべて404でした。ユーザー情報APIのパスが候補と違います。';
     else if (anyOkNoId) why = '応答は返りましたが、ユーザーIDの項目が見つかりません(下のキー一覧を確認)。';
     else why = '候補のパスでは取得できませんでした(下の診断を確認)。';
@@ -668,7 +678,7 @@
   el.btnAutoUid.addEventListener('click', autoUid);
 
   el.btnSave.addEventListener('click', async () => {
-    const token = el.token.value.trim();
+    const token = cleanToken(el.token.value);
     const uid = el.uid.value.trim();
     if (!token || !uid) {
       el.settingsMsg.textContent = 'トークンとユーザーIDの両方を入力してください。';
