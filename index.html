@@ -95,18 +95,19 @@
   .row {
     display: grid;
     grid-template-columns: 1fr auto;
-    align-items: baseline;
+    grid-template-rows: auto auto;
+    align-items: center;
     gap: 2px 12px;
     padding: 10px 0;
     border-top: 1px solid var(--line);
   }
   .row:first-of-type { border-top: 0; }
-  .diff { font-size: 14px; font-weight: 650; }
+  .diff { grid-column: 1; grid-row: 1; align-self: end; font-size: 14px; font-weight: 650; }
   .diff small { font-weight: 500; color: var(--muted); margin-left: 4px; }
   .diff.A { color: var(--another); }
   .diff.L { color: var(--legg); }
-  .ex { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; text-align: right; line-height: 1.1; }
-  .sub { grid-column: 1 / -1; font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .ex { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; text-align: right; line-height: 1.1; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  .sub { grid-column: 1; grid-row: 2; align-self: start; font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
   .sub b { color: var(--ink); font-weight: 600; }
 
   .notice { margin-top: 24px; color: var(--muted); font-size: 15px; }
