@@ -433,8 +433,9 @@
 
   // <READING-CORE>
   const KANJI = /[\u4e00-\u9fff々〆ヶ]/;
-  const DEVOICE_FROM = 'がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽゔ';
-  const DEVOICE_TO = 'かきくけこさしすせそたちつてとはひふへほはひふへほう';
+  // が・ざ・だ行だけ清音に寄せる(asian→あじあん のような s/z の揺れ用)。ば・ぱ・は行は区別する
+  const DEVOICE_FROM = 'がぎぐげござじずぜぞだぢづでど';
+  const DEVOICE_TO = 'かきくけこさしすせそたちつてと';
   const DEVOICE = {};
   [...DEVOICE_FROM].forEach((c, i) => { DEVOICE[c] = DEVOICE_TO[i]; });
 
@@ -444,7 +445,7 @@
       .replace(/[\u30A1-\u30F6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
   }
 
-  // 濁点・半濁点・長音・促音の違いを吸収した比較用キー
+  // が・ざ・だ行の濁点、長音、促音の違いを吸収した比較用キー
   function loose(s) {
     return [...toHira(s)].map((c) => DEVOICE[c] || c).join('')
       .replace(/[ーっ]/g, '')
@@ -524,11 +525,11 @@
     return a === b ? [a] : [a, b];
   }
 
-  // 比較用キー: 厳密(ー・っを残す) / 濁点無視 / さらに ー・っも無視
+  // 比較用キー: 厳密(ー・っを残す) / が・ざ・だ行の濁点を無視 / さらに ー・っも無視
   function keyStrict(s) { return toHira(s).replace(/[^ぁ-ゖーa-z0-9\u4e00-\u9fff]/g, ''); }
   function keyVoice(s) { return [...keyStrict(s)].map((c) => DEVOICE[c] || c).join(''); }
 
-  // 0: 不一致 / 1: 曲名で一致 / 2: 読みで一致 / 3: 濁点違いを許して一致 / 4: 長音・促音も無視して一致
+  // 0: 不一致 / 1: 曲名で一致 / 2: 読みで一致 / 3: が・ざ・だ行の濁点違いを許して一致 / 4: 長音・促音も無視して一致
   // (全語のうち最もゆるい段階を返す)
   function songMatches(song, tokens) {
     let worst = 1;
@@ -844,16 +845,16 @@ onmessage = function (e) {
     if (!tokens.length) return [];
     const first = tokens[0];
     const hits = [];
-    let best = 99;
+    let best = 99; // 読みで一致した曲のうち、最も厳しい段階
     for (const sg of songs) {
       const m = songMatches(sg, tokens);
       if (!m) continue;
       sg.tier = m;
       hits.push(sg);
-      if (m < best) best = m;
+      if (m >= 2 && m < best) best = m;
     }
-    // 厳しい段階で見つかった場合、いちばんゆるい段階(4)の曲は出さない(ノイズ対策)
-    const shown = best >= 4 ? hits : hits.filter((sg) => sg.tier <= 3);
+    // 曲名での一致は常に出し、読みでの一致は最も厳しい段階のものだけ出す(ノイズ対策)
+    const shown = hits.filter((sg) => sg.tier === 1 || sg.tier === best);
     shown.sort((a, b) => {
       const ap = a.norm.startsWith(first) ? 0 : 1;
       const bp = b.norm.startsWith(first) ? 0 : 1;
